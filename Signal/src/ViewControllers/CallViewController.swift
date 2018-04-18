@@ -1083,11 +1083,13 @@ class CallViewController: OWSViewController, CallObserver, CallServiceObserver, 
             hasDismissed = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
                 guard let strongSelf = self else { return }
-                strongSelf.dismiss(animated: true, completion: completion)
+                OWSWindowManager.shared().endCall(strongSelf)
+                completion?()
             }
         } else {
             hasDismissed = true
-            self.dismiss(animated: false, completion: completion)
+            OWSWindowManager.shared().endCall(self)
+            completion?()
         }
     }
 

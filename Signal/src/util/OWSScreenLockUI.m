@@ -3,6 +3,7 @@
 //
 
 #import "OWSScreenLockUI.h"
+#import "OWSWindowManager.h"
 #import "Signal-Swift.h"
 #import <SignalMessaging/SignalMessaging-Swift.h>
 #import <SignalMessaging/UIView+OWS.h>
@@ -30,31 +31,9 @@ NSString *NSStringForScreenLockUIState(ScreenLockUIState value)
     }
 }
 
-const UIWindowLevel UIWindowLevel_Background = -1.f;
-
-// OWSScreenBlockingWindow tries to become first responder
-// when presented to ensure that the input accessory is updated.
-@interface OWSScreenBlockingViewController : UIViewController
-
-@end
-
-#pragma mark -
-
-@implementation OWSScreenBlockingViewController
-
-- (BOOL)canBecomeFirstResponder
-{
-    return YES;
-}
-
-@end
-
-#pragma mark -
-
 @interface OWSScreenLockUI ()
 
 @property (nonatomic) UIWindow *screenBlockingWindow;
-@property (nonatomic) UIViewController *screenBlockingViewController;
 @property (nonatomic) UIView *screenBlockingImageView;
 @property (nonatomic) UIView *screenBlockingButton;
 @property (nonatomic) NSArray<NSLayoutConstraint *> *screenBlockingConstraints;
@@ -93,11 +72,6 @@ const UIWindowLevel UIWindowLevel_Background = -1.f;
 
 // The "countdown" until screen lock takes effect.
 @property (nonatomic, nullable) NSDate *screenLockCountdownDate;
-
-@property (nonatomic) UIWindow *rootWindow;
-
-@property (nonatomic, nullable) UIResponder *rootWindowResponder;
-@property (nonatomic, nullable, weak) UIViewController *rootFrontmostViewController;
 
 @end
 
@@ -172,9 +146,12 @@ const UIWindowLevel UIWindowLevel_Background = -1.f;
     OWSAssertIsOnMainThread();
     OWSAssert(rootWindow);
 
-    self.rootWindow = rootWindow;
+    [self createScreenBlockingWindowWithRootWindow:rootWindow];
+    OWSAssert(self.screenBlockingWindow);
+    [[OWSWindowManager sharedManager] setupWithRootWindow:rootWindow screenBlockingWindow:self.screenBlockingWindow];
 
-    [self prepareScreenProtectionWithRootWindow:rootWindow];
+    // Default to screen protection until we know otherwise.
+    [self updateScreenBlockingWindow:ScreenLockUIStateNone animated:NO];
 
     // Initialize the screen lock state.
     //
@@ -414,14 +391,14 @@ const UIWindowLevel UIWindowLevel_Background = -1.f;
                          // After the alert, re-show the unlock UI.
                          [self ensureUI];
                      }
-               fromViewController:self.screenBlockingViewController];
+               fromViewController:self.screenBlockingWindow.rootViewController];
 }
 
 // 'Screen Blocking' window obscures the app screen:
 //
 // * In the app switcher.
 // * During 'Screen Lock' unlock process.
-- (void)prepareScreenProtectionWithRootWindow:(UIWindow *)rootWindow
+- (void)createScreenBlockingWindowWithRootWindow:(UIWindow *)rootWindow
 {
     OWSAssertIsOnMainThread();
     OWSAssert(rootWindow);
@@ -432,7 +409,7 @@ const UIWindowLevel UIWindowLevel_Background = -1.f;
     window.opaque = YES;
     window.backgroundColor = UIColor.ows_materialBlueColor;
 
-    UIViewController *viewController = [OWSScreenBlockingViewController new];
+    UIViewController *viewController = [OWSWindowRootViewController new];
     viewController.view.backgroundColor = UIColor.ows_materialBlueColor;
 
     UIView *rootView = viewController.view;
@@ -475,12 +452,8 @@ const UIWindowLevel UIWindowLevel_Background = -1.f;
     window.rootViewController = viewController;
 
     self.screenBlockingWindow = window;
-    self.screenBlockingViewController = viewController;
     self.screenBlockingImageView = imageView;
     self.screenBlockingButton = button;
-
-    // Default to screen protection until we know otherwise.
-    [self updateScreenBlockingWindow:ScreenLockUIStateNone animated:NO];
 }
 
 // The "screen blocking" window has three possible states:
@@ -495,64 +468,12 @@ const UIWindowLevel UIWindowLevel_Background = -1.f;
     OWSAssertIsOnMainThread();
 
     BOOL shouldShowBlockWindow = desiredUIState != ScreenLockUIStateNone;
-    if (self.rootWindow.hidden != shouldShowBlockWindow) {
-        DDLogInfo(@"%@, %@.", self.logTag, shouldShowBlockWindow ? @"showing block window" : @"hiding block window");
-    }
 
-    // When we show the block window, try to capture the first responder of
-    // the root window before it is hidden.
-    //
-    // When we hide the root window, its first responder will resign.
-    if (shouldShowBlockWindow && !self.rootWindow.hidden) {
-        self.rootWindowResponder = [UIResponder currentFirstResponder];
-        self.rootFrontmostViewController = [UIApplication.sharedApplication frontmostViewControllerIgnoringAlerts];
-        DDLogInfo(@"%@ trying to capture self.rootWindowResponder: %@ (%@)",
-            self.logTag,
-            self.rootWindowResponder,
-            [self.rootFrontmostViewController class]);
-    }
-
-    // * Show/hide the app's root window as necessary.
-    // * Never hide the blocking window (that can lead to bad frames).
-    //   Instead, manipulate its window level to move it in front of
-    //   or behind the root window.
-    if (shouldShowBlockWindow) {
-        // Show the blocking window in front of the status bar.
-        self.screenBlockingWindow.windowLevel = UIWindowLevelStatusBar + 1;
-        self.rootWindow.hidden = YES;
-        [self.screenBlockingViewController becomeFirstResponder];
-    } else {
-        self.screenBlockingWindow.windowLevel = UIWindowLevel_Background;
-        [self.rootWindow makeKeyAndVisible];
-
-        // When we hide the block window, try to restore the first
-        // responder of the root window.
-        //
-        // It's important we restore first responder status once the user completes
-        // In some cases, (RegistrationLock Reminder) it just puts the keyboard back where
-        // the user needs it, saving them a tap.
-        // But in the case of an inputAccessoryView, like the ConversationViewController,
-        // failing to restore firstResponder could hide the input toolbar.
-
-        UIViewController *rootFrontmostViewController =
-            [UIApplication.sharedApplication frontmostViewControllerIgnoringAlerts];
-
-        DDLogInfo(@"%@ trying to restore self.rootWindowResponder: %@ (%@ ? %@ == %d)",
-            self.logTag,
-            self.rootWindowResponder,
-            [self.rootFrontmostViewController class],
-            rootFrontmostViewController,
-            self.rootFrontmostViewController == rootFrontmostViewController);
-        if (self.rootFrontmostViewController == rootFrontmostViewController) {
-            [self.rootWindowResponder becomeFirstResponder];
-        }
-        self.rootWindowResponder = nil;
-        self.rootFrontmostViewController = nil;
-    }
+    [OWSWindowManager.sharedManager setIsScreenBlockActive:shouldShowBlockWindow];
 
     self.screenBlockingImageView.hidden = !shouldShowBlockWindow;
 
-    UIView *rootView = self.screenBlockingViewController.view;
+    UIView *rootView = self.screenBlockingWindow.rootViewController.view;
 
     BOOL shouldHaveScreenLock = desiredUIState == ScreenLockUIStateScreenLock;
     NSString *signature = [NSString stringWithFormat:@"%d %d", shouldHaveScreenLock, self.isShowingScreenLockUI];
