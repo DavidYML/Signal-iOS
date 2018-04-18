@@ -242,6 +242,9 @@ class CallViewController: OWSViewController, CallObserver, CallServiceObserver, 
         if !remoteVideoView.isHidden {
             shouldRemoteVideoControlsBeHidden = !shouldRemoteVideoControlsBeHidden
         }
+
+        // TODO: Until we have a proper design, use background taps to leave call view.
+        OWSWindowManager.shared().leaveCallView()
     }
 
     func createVideoViews() {
@@ -1167,5 +1170,14 @@ accessibilityLabel: NSLocalizedString("CALL_VIEW_DECLINE_INCOMING_CALL_LABEL",
 
         updateLocalVideoTrack(localVideoTrack: localVideoTrack)
         updateRemoteVideoTrack(remoteVideoTrack: remoteVideoTrack)
+    }
+
+    // MARK: - Event Handlers
+
+    func leaveCallViewTapped(sender: UIGestureRecognizer) {
+        guard sender.state == .recognized else {
+            return
+        }
+        OWSWindowManager.shared().leaveCallView()
     }
 }
